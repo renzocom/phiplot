@@ -1,11 +1,10 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import pickle
 import pandas as pd
 import art
 
-import pyphi
-import pyphi.relations as rel
+from phiplot import ces_view
+
+
 # import pyphi.visualize as vis # only for matteo's version
 
 ## INDEX ##
@@ -25,6 +24,16 @@ import pyphi.relations as rel
 # time_relation(mechA, mechB, strict=True)
 
 rel_square_keys = ['Ac2eA', 'Bc2eB', 'Ac2eB', 'Ae2cB', 'Ac2cB', 'Ae2eB']
+
+def quick_distinction_str(distinction):
+    ''' Quick and short representation of distinction.
+
+
+    '''
+    mech, cause, effect = ces_view.nodes_ixs2label([distinction.mechanism, distinction.cause_purview, distinction.effect_purview], distinction.node_labels)
+    cause_phi, effect_phi = distinction.cause.phi, distinction.effect.phi
+    return f"{cause} ({cause_phi:.3f}) -> {mech} -> {effect} ({effect_phi:.3f})"
+
 
 def ix2label(node_ixs, node_labels):
     """Converts node indices to mechanism label.
@@ -52,6 +61,7 @@ def ix2label(node_ixs, node_labels):
     """
     
     return ''.join([node_labels[x] for x in node_ixs])
+
 
 def frame_str(s):
     'Decorates a string with a #-frame.'

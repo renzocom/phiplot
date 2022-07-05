@@ -4,6 +4,7 @@
 Created on 23/06/2021
 @author: renzocom
 """
+
 import itertools
 import numpy as np
 
@@ -15,13 +16,12 @@ import plotly.graph_objects as go
 
 import collections
 
-from . import ces_report
+from phiplot import ces_report
 
 MAGENTA = '#e264ed'
 LIGHT_BLUE = '#66f0ff'
 YELLOW = '#f7d631'
 LIGHT_GRAY = "#d6d6d6"
-
 
 class CauseEffectStructure():
     '''
@@ -36,33 +36,31 @@ class CauseEffectStructure():
     ces : list of mechanisms (pyphi.models.mechanism.Concept)
     rels : list of 2-relations (pyphi.relations.Relation)
     graph : None (or nx.Graph())
-    node_labels : None (or list of str)
+    subsystem : None (or list of str)
 
     TODO figure out why nx.draw(CES) is different from nx.draw(CES._CES)
     '''
-    def __init__(self, mechs=None, rels=None, graph=None, node_labels=None):
+    def __init__(self, subsystem, mechs=None, rels=None, graph=None):
+        self.subsystem = subsystem
+        if 'X' in subsystem.node_labels:
+            self.node_labels = list(subsystem.node_labels)[:-1]
+        else:
+            self.node_labels = list(subsystem.node_labels)
+
+        self.n_nodes = len(self.node_labels)
 
         if graph is not None:
             self._CES = graph
         else:
             self._CES = nx.Graph()
-
         if mechs is not None:
+            if self.node_labels!=list(mechs[0].node_labels):
+                print("WARNING: node_labels from subsystem do not match node_labels from mechanisms")
             for mech in mechs:
                 self.add_mechanism(mech)
-
         if rels is not None:
             for rel in rels:
                 self.add_relation(rel)
-
-        if mechs is not None:
-            self.node_labels = list(mechs[0].node_labels)
-
-        elif node_labels is not None:
-            self.node_labels = list(node_labels)
-        else:
-            raise TypeError("Missing 'node_labels'.")
-        self.n_nodes = len(self.node_labels)
 
         self.nodes = self._get_nodes()
         self.edges = self._get_edges()
@@ -77,6 +75,8 @@ class CauseEffectStructure():
         self.is_directed = self._CES.is_directed
 
         self.mech_nodes = self._get_mech_nodes()
+
+        self.add_hasse_layout(warp=0)
 
     def __next__(self):
         return self._CES.__next__()
@@ -141,13 +141,13 @@ class CauseEffectStructure():
 
     def add_relation(self, rel):
         typeA, typeB = rel.relata[0].direction.name, rel.relata[1].direction.name
-        mech_A_label, mech_B_label = get_rel_label(rel, kind='mechs')
-        purview_A_label, purview_B_label = get_rel_label(rel, kind='purviews')
+        mech_A_label, mech_B_label = get_rel_label(rel, 'mechs', self.node_labels)
+        purview_A_label, purview_B_label = get_rel_label(rel, 'purviews', self.node_labels)
 
         mech_purview_A_label, mech_purview_B_label = '_'.join([mech_A_label, purview_A_label]), '_'.join(
             [mech_B_label, purview_B_label])
 
-        rel_tmp_A, rel_tmp_B = get_rel_label(rel, 'purviews', add_prefix=False)
+        rel_tmp_A, rel_tmp_B = get_rel_label(rel, 'purviews',  self.node_labels, add_prefix=False)
         set_rel, set_rel2 = set_relation(rel_tmp_A, rel_tmp_B)
 
         rel_type = f'{typeA}_{typeB}'
@@ -193,7 +193,7 @@ class CauseEffectStructure():
 
         subgraph = self.subgraph(mechs + purviews)
 
-        return CauseEffectStructure(graph=subgraph, node_labels=self.node_labels)
+        return CauseEffectStructure(self.subsystem, graph=subgraph)
 
     def substructure_exterior(self, mechs):
         '''TODO: remove edges which are not related to mechs.'''
@@ -211,7 +211,28 @@ class CauseEffectStructure():
 
         subgraph = self.subgraph(related_mechs + related_purviews)
 
-        return CauseEffectStructure(graph=subgraph, node_labels=self.node_labels)
+        return CauseEffectStructure(self.subsystem, graph=subgraph)
+
+    def substructure_composition_of_interiors(self, shapes):
+        '''
+        Returns the cause effect structure of the composition between the substructure interior of each shape (list of mechanisms).
+        e.g. the CES of the interior of ['AB', 'BC', 'ABC'] with the interior of ['DE', 'EF'].
+
+        Parameters
+        ----------
+        CES : CauseEffectStructure()
+        shapes : list of list of mech labels
+
+        Returns
+        -------
+        new CES
+        '''
+        new_ces = nx.Graph()
+        for mechs in shapes:
+            shape_ces = self.substructure_interior(mechs).to_graph()
+            new_ces = nx.compose(new_ces, shape_ces)
+
+        return CauseEffectStructure(self.subsystem, graph=new_ces)
 
     def to_graph(self):
         ''' Returns CES as graph (networkx.classes.graph.Graph).'''
@@ -265,12 +286,12 @@ class CauseEffectStructure():
 
         Returns
         -------
-        CauseEffectStructure()
+        CauseEffectStructure
 
         '''
         triangles = hasse_triangles(n_elements=self.n_nodes)
         triangle_labels = [nodes_ixs2label(triangle, self.node_labels) for triangle in triangles]
-        hasse_ces = substructure_composition_of_interiors(self, triangle_labels)
+        hasse_ces = self.substructure_composition_of_interiors(triangle_labels)
         return hasse_ces
 
     def get_reduced_ces(self, restrict_to_hasse_pyramid=False):
@@ -327,6 +348,8 @@ class ReducedCauseEffectStructure():
                                            node_labels=self.node_labels,
                                            red_CES_graph=self.graph.copy())
 
+    
+
     def reduce_CES(self, CES):
         '''
         Returns nx.DiGraph() with reduced CES graph.
@@ -379,7 +402,6 @@ class ReducedCauseEffectStructure():
             v_cause_purview, v_effect_purview = (v_mech_purviews[0], v_mech_purviews[1]) if \
                 v_mech_purviews[0].split('_')[2] == 'c' else (v_mech_purviews[1], v_mech_purviews[0])
 
-
             rel_square = dict(u_cause2effect_u={},
                               v_cause2effect_v={},
                               u_cause2effect_v={},
@@ -396,16 +418,31 @@ class ReducedCauseEffectStructure():
 
                 # relation exists
                 if edge in CES.edges:
-                    rel_square[key] = CES.edges[edge]
+                    info = CES.edges[edge]
+                    # check if mech order of info in graph edge matches with order of new edge
+                    edge_A = info['mech_A'] + '_' + info['purview_A']
+                    edge_B = info['mech_B'] + '_' + info['purview_B']
+                    if edge_A==edge[0] and edge_B==edge[1]:
+                        rel_square[key] = info['rel_type']
+                    elif edge_A==edge[1] and edge_B==edge[0]:
+                        rel_square[key] = flip_rel_type(info['rel_type'])
+                    else:
+                        raise ValueError(f"Inconsistent information: {edge_A, edge_B, edge}")
+
                 else:
-                    rel_square[key]['rel_type'] = ' '
-                    rel_square[key]['rel_type2'] = 'nothing'
+                    rel_square[key] = ' '
 
-            pattern = '_'.join([d['rel_type'] for _, d in rel_square.items()])
-            pattern2 = '_'.join([d['rel_type2'] for _, d in rel_square.items()])
 
+            pattern = '_'.join(rel_square.values())
+            # pattern = '_'.join([d['rel_type'] for _, d in rel_square.items()])
+            # pattern2 = '_'.join([d['rel_type2'] for _, d in rel_square.items()])
+            # pattern3 is insensitive to symmetry of relation square
+            # (e.g. '<_=_>_<_=_<' and '=_<_>_<_=_>' are equivalent)
+            pattern3 = frozenset([pattern, flip_rel_square(pattern)]) 
+            
             red_CES.edges[mech_edge]['pattern'] = pattern
-            red_CES.edges[mech_edge]['pattern2'] = pattern2
+            red_CES.edges[mech_edge]['pattern3'] = pattern3
+            
             red_CES.edges[mech_edge]['causal_flow'] = self.calc_causal_flow(u_cause_purview, u_effect_purview, v_cause_purview, v_effect_purview)
             red_CES.edges[mech_edge]['causal_flow_norm'] = self.calc_causal_flow(u_cause_purview, u_effect_purview,
                                                                             v_cause_purview, v_effect_purview, norm=True)
@@ -449,6 +486,10 @@ class ReducedCauseEffectStructure():
     def get_colormap_from_relation_pattern(self, pattern_field='pattern', given_pattern2color=None, colormap=['Set1', 'Set2'], max_n_colors=17):
         '''
         Returns relation square pattern to color map based on most common patterns.
+
+        Parameters
+        ----------
+        pattern_field: name of attribute of graph edge with pattern.
         '''
 
         sorted_patterns, _ = self.get_sorted_patterns(pattern_field)
@@ -630,6 +671,49 @@ class ReducedCauseEffectStructure():
         pattern_hist = collections.Counter(patterns)
         sorted_patterns, count = zip(*pattern_hist.most_common())
         return sorted_patterns, count
+
+def flip_rel_type(s):
+    '''
+    Flips relation type (<, >, ~, =).
+
+    Examples
+    --------
+    >>> flip_rel_type('<')
+    '>'
+    >>> flip_rel_type('=')
+    '='
+    '''
+
+    flipper = {'=':'=', '<':'>', '>':'<', '~':'~', ' ':' '}
+    return flipper[s]
+
+
+def flip_rel_square(pattern):
+    '''
+    Receives a relation square pattern (with order: Ac2eA, Bc2eB, Ac2eB, Ae2cB, Ac2cB, Ae2eB) (e.g. '~_~_~_<_<_<') and returns
+    the relation square pattern if the mechanisms related where flipped (A<-->B becomes B<-->A).
+    
+    Relation squares are flipped in the following way:
+    1_2_3_4_5_6 --> 2_1_4'_3'_5'_6' (where apostrophe is the inversion of relation, e.g. < to >)
+    
+    Examples
+    --------
+    >>> flip_rel_square('<_=_>_<_=_<')
+    '=_<_>_<_=_>'
+    
+    >>> flip_rel_square('=_<_>_<_=_>')
+    '<_=_>_<_=_<'
+    
+    >>> flip_rel_square('~_=_>_~_>_~')
+    '=_~_~_<_<_~'
+    '''
+    
+   
+    
+    rels = pattern.split('_')
+    new_pattern = [rels[1], rels[0], flip_rel_type(rels[3]), flip_rel_type(rels[2]), flip_rel_type(rels[4]), flip_rel_type(rels[5])]
+    new_pattern = '_'.join(new_pattern)
+    return new_pattern
 
 def color_array(n_colors, n_grays, colormap, exclude_rgb_colors=None):
     '''
@@ -876,29 +960,6 @@ def node_label2ixs(label, node_labels):
 
 
 
-
-def substructure_composition_of_interiors(CES, shapes):
-    '''
-    Returns the cause effect structure of the composition between the substructure interior of each shape (list of mechanisms).
-    e.g. the CES of the interior of ['AB', 'BC', 'ABC'] with the interior of ['DE', 'EF']
-
-    Parameters
-    ----------
-    CES : CauseEffectStructure()
-    shapes : list of list of mech labels
-
-    Returns
-    -------
-    new CES
-    '''
-    new_ces = nx.Graph()
-    for shape in shapes:
-        shape_ces = CES.substructure_interior(shape).to_graph()
-        new_ces = nx.compose(new_ces, shape_ces)
-
-    return CauseEffectStructure(graph=new_ces, node_labels=CES.node_labels)
-
-
 def warp_hasse_layout(node2pos, rho=0.1, mode='exponential'):
     '''
     Warps hasse layout.
@@ -1034,15 +1095,15 @@ def get_mech_label(mech, kind='mech', add_prefix=True, node_labels=None):
     return prefix + ''.join([node_labels[ix] for ix in ixs])
 
 
-def get_rel_label(rel, kind, add_prefix=True, node_labels=None):
+def get_rel_label(rel, kind, node_labels, add_prefix=True):
     '''
 
     Parameters
     ----------
     rel : pyphi.relations.Relation
     kind : ['mechs', 'purviews', 'rel_purview']
-    add_prefix : bool
     node_labels : list of str
+    add_prefix : bool
 
     Returns
     -------
@@ -1050,17 +1111,17 @@ def get_rel_label(rel, kind, add_prefix=True, node_labels=None):
 
     Examples
     --------
-    >>> get_rel_labels(rel, 'mechs', add_prefix=True)
+    >>> get_rel_labels(rel, 'mechs', node_labels, add_prefix=True)
     ['m_FE', 'm_GFED']
 
-    >>> get_rel_labels(rel, 'purviews', add_prefix=True)
+    >>> get_rel_labels(rel, 'purviews', node_labels, add_prefix=True)
     ['c_ED', 'c_FEDC']
 
-    >>> get_rel_labels(rel, 'rel_purview', add_prefix=True)
+    >>> get_rel_labels(rel, 'rel_purview', node_labels, add_prefix=True)
     'p_E'
     '''
 
-    node_labels = rel.relata[0].node_labels
+    # node_labels = rel.relata[0].node_labels
 
     def ixs2label(ixs):
         return ''.join([node_labels[ix] for ix in ixs])
@@ -1224,7 +1285,9 @@ def plot_ces(CES, pos=None, fig=None, figsize=(15, 8), edge_color=None, node_col
     ax.margins(0.20)
 
 
-def plotly_ces(CES, fig=None,
+def plotly_ces(CES,
+               fig=None,
+               subplot=(None,None),
                renderer=None,
                edge_color_field='set_rel_color',
                node_color_field='color',
@@ -1243,6 +1306,7 @@ def plotly_ces(CES, fig=None,
                show_mech_label=True,
                edge_group_field='rel_type2',
                show_legend=True,
+               title='',
                layout_width=1200,
                layout_height=750,
                xlim=None,
@@ -1253,7 +1317,7 @@ def plotly_ces(CES, fig=None,
     Parameters
     ----------
     CES : CauseEffectStructure()
-    renderer
+    subplot : (row, col)
     '''
 
     if fig is None:
@@ -1345,16 +1409,16 @@ def plotly_ces(CES, fig=None,
                                           showlegend=show_legend_flag)
                                )
 
-    fig.add_traces(edge_traces)
-    fig.add_traces(node_traces)
-
+    fig.add_traces(edge_traces, rows=subplot[0], cols=subplot[1])
+    fig.add_traces(node_traces, rows=subplot[0], cols=subplot[1])
+    if title!='':
+        fig.update_layout(title_text=title)
     if show_fig:
         fig.show(renderer=renderer)
 
     if save_image_path is not None:
         fig.write_image(save_image_path, scale=save_image_scale)
     return fig
-
 
 def plotly_reduced_ces(reduced_CES,
                        renderer=None,
@@ -1412,37 +1476,38 @@ def plotly_reduced_ces(reduced_CES,
                             )
 
     # EDGES
-    all_patterns = nx.get_edge_attributes(G, 'pattern').values()
-    top_patterns, _ = zip(*collections.Counter(all_patterns).most_common())
+    if len(G.edges) > 0:
+        all_patterns = nx.get_edge_attributes(G, 'pattern').values()
+        top_patterns, _ = zip(*collections.Counter(all_patterns).most_common())
 
-    edge_traces = []
-    patterns = []
-    for edge in G.edges:
-        pattern = G.edges[edge]['pattern']
+        edge_traces = []
+        patterns = []
+        for edge in G.edges:
+            pattern = G.edges[edge]['pattern']
 
-        if pattern in patterns:
-            showlegend = False
-            legendrank = 1000
-        else:
-            showlegend = True
-            patterns.append(pattern)
-            legendrank = top_patterns.index(pattern) + 1
+            if pattern in patterns:
+                showlegend = False
+                legendrank = 1000
+            else:
+                showlegend = True
+                patterns.append(pattern)
+                legendrank = top_patterns.index(pattern) + 1
 
-        x, y = list(zip(node2pos[edge[0]], node2pos[edge[1]], [None, None]))
+            x, y = list(zip(node2pos[edge[0]], node2pos[edge[1]], [None, None]))
 
-        edge_trace = go.Scatter(x=x,
-                                y=y,
-                                mode='lines',
-                                line=dict(color=G.edges[edge]['pattern_color'], width=edge_width),
-                                legendgroup=pattern,
-                                showlegend=showlegend,
-                                name=pattern,
-                                legendrank=legendrank,
-                                hoverinfo='none')
-        edge_traces.append(edge_trace)
+            edge_trace = go.Scatter(x=x,
+                                    y=y,
+                                    mode='lines',
+                                    line=dict(color=G.edges[edge]['pattern_color'], width=edge_width),
+                                    legendgroup=pattern,
+                                    showlegend=showlegend,
+                                    name=pattern,
+                                    legendrank=legendrank,
+                                    hoverinfo='none')
+            edge_traces.append(edge_trace)
 
-    fig.update_layout(legend_traceorder='grouped')
-    fig.add_traces(edge_traces)
+        fig.update_layout(legend_traceorder='grouped')
+        fig.add_traces(edge_traces)
 
     fig.add_trace(node_trace)
 
